@@ -1,0 +1,12 @@
+[project]
+name = "hackvm"
+version = "1.0.0"
+authors = [
+  { name="Simon Nganga", email="theedushbag@gmail.com" },
+]
+description = "hackvm is a translator from VM instructions to HackASM."
+requires-python = ">=3.11"
+
+[project.scripts]
+havm = "hackvm.main:main"
+
