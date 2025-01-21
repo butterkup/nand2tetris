@@ -181,7 +181,7 @@ class Parser:
                 raise Exception(
                     "Line:",
                     self.line,
-                    ":Missing comp part of C instruction",
+                    ":Missing mandatory comp part of C instruction",
                     dest,
                     code,
                 )
@@ -202,10 +202,10 @@ class Parser:
     def parse(self) -> AInstruction | CInstruction | None:
         while True:
             inst = self._parse_inst()
-            if isinstance(inst, EOSsentinelType):
-                continue
             if inst is None:
                 break
+            if isinstance(inst, EOSsentinelType):
+                continue
             if isinstance(inst, AInstruction):
                 if inst.value.typ == Token.Type.LABEL:
                     if self.count >= 0x8000:
@@ -216,7 +216,7 @@ class Parser:
                             self.count,
                         )
                     self.labels[inst.value.lexeme] = self.count
-                    self.count -= 1
+                    self.count -= 1 # Don't count label instructions
             self.count += 1
             return inst
 

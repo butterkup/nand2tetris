@@ -17,7 +17,7 @@ def main():
         print("Usage: python -m hackass program.asm\n  -> program.hack", file=sys.stderr)
         return 1
     input_file = pathlib.Path(sys.argv[1])
-    if not input_file.exists():
+    if not input_file.is_file():
         print(f"Cannot find input file: {input_file!s}", file=sys.stderr)
         return 2
     if input_file.suffix != ".asm":

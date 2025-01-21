@@ -20,6 +20,7 @@ class Translator:
         self.reset()
 
     def reset(self):
+        self.not_found = set[str]()
         labgen = label_generator(self.prefix)
         self.codegen = CodeGen(self.names, labgen)
 
@@ -35,6 +36,8 @@ class Translator:
 
     def resolve_refs(self):
         for name in self.codegen.referenced:
+            if name in self.not_found:
+                continue
             if found := self.resolve(name):
                 return name, found
         return None, None
@@ -56,9 +59,10 @@ class Translator:
             try:
                 yield from self._translate(found.stem, program)
                 if name in self.codegen.referenced:
-                    raise Exception(f'{found} does not provide function {name!r}')
+                    self.not_found.add(name)
             except Exception as e:
-                raise Exception(f"Error while translating {found!s}\n{e!s}") from e
+                e.add_note(f"Error encountered while processing: {found!s}")
+                raise
         if self.codegen.referenced:
             raise Exception(
                 "Unresolved functions\n"
@@ -68,3 +72,4 @@ class Translator:
                 )
             )
         yield from self.codegen.program_teardown()
+

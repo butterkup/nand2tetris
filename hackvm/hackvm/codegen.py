@@ -11,6 +11,7 @@ class Symbols:
     stack: int = 0  # SP [256-2047]
     local: int = 1  # LCL
     argument: int = 2  # ARG
+    stack_base: int = 256 # Base address for the stack to start from
 
     # this and that must follow each other as depended by pointer
     this: int = 3  # THIS
@@ -388,7 +389,7 @@ class CodeGen:
     def gen(self, stmts: ty.Iterator[Statement], nm: str) -> ty.Iterator[str]:
         T = Token.Type
         for stmt in stmts:
-            yield f"\n// {stmt[0].line}|   " + " ".join(tk.lexeme for tk in stmt)
+            yield f"\n// {nm}[{stmt[0].line}]   " + " ".join(tk.lexeme for tk in stmt)
             match stmt:
                 case (Token(typ=T.AND | T.OR | T.ADD | T.SUB),):
                     yield from self.binary_arithmetic_cmd(_bin_op_tbl[stmt[0].typ])
@@ -437,3 +438,4 @@ class CodeGen:
                     raise Exception(
                         f"Line {stmt[0].line}: Cannot translate statement {' '.join(map(lambda t: t.lexeme, stmt))!r}"
                     )
+
