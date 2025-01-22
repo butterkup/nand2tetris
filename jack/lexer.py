@@ -186,9 +186,9 @@ class _Lexer_helper:
                 case "=":
                     return self.make_token(T.EQUAL if self.match_nxt("=") else T.ASSIGN)
                 case "<":
-                    return self.make_token(T.LESSE if self.match_nxt("=") else T.LESS)
+                    return self.make_token(T.LESSE if self.match_nxt("=") else T.LESST)
                 case ">":
-                    return self.make_token(T.GREATE if self.match_nxt("=") else T.GREAT)
+                    return self.make_token(T.GREATE if self.match_nxt("=") else T.GREATT)
                 case "!":
                     return self.make_token(T.NEQUAL if self.match_nxt("=") else T.NOT)
                 case " " | "\t" | "\n":

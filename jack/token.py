@@ -6,6 +6,8 @@ import enum
 class Token:
     class Type(enum.StrEnum):
         CLASS = enum.auto()
+        BREAK = enum.auto()
+        CONTINUE = enum.auto()
         RETURN = enum.auto()
         ID = enum.auto()
         INT = enum.auto()
@@ -31,9 +33,9 @@ class Token:
         ASSIGN = enum.auto()
         EQUAL = enum.auto()
         NEQUAL = enum.auto()
-        LESS = enum.auto()
+        LESST = enum.auto()
         LESSE = enum.auto()
-        GREAT = enum.auto()
+        GREATT = enum.auto()
         GREATE = enum.auto()
         AND = enum.auto()
         OR = enum.auto()
@@ -74,4 +76,6 @@ KEYWORDS: dict[str, Token.Type] = {
     "this": Token.Type.THIS,
     "using": Token.Type.USING,
     "return": Token.Type.RETURN,
+    "break": Token.Type.BREAK,
+    "continue": Token.Type.CONTINUE,
 }
