@@ -6,6 +6,8 @@ import enum
 class Token:
     class Type(enum.StrEnum):
         CLASS = enum.auto()
+        IS = enum.auto()
+        ISNOT = enum.auto()
         BREAK = enum.auto()
         CONTINUE = enum.auto()
         RETURN = enum.auto()
@@ -49,6 +51,7 @@ class Token:
         ELSE = enum.auto()
         THIS = enum.auto()
         USING = enum.auto()
+        AUTO = enum.auto()
         EOT = enum.auto()
 
     @dt.dataclass(slots=True)
@@ -78,4 +81,5 @@ KEYWORDS: dict[str, Token.Type] = {
     "return": Token.Type.RETURN,
     "break": Token.Type.BREAK,
     "continue": Token.Type.CONTINUE,
+    "auto": Token.Type.AUTO,
 }

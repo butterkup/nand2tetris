@@ -116,7 +116,7 @@ class _Lexer_helper:
 
     def consume_multi_comment(self):
         while not self.empty():
-            if self.peek() == "*" and self.match_nxt("/"):
+            if self.match("*") and self.match("/"):
                 break
             self.advance()
         else:
@@ -184,13 +184,23 @@ class _Lexer_helper:
                 case "&":
                     return self.make_token(T.AND if self.match_nxt("&") else T.AMP)
                 case "=":
-                    return self.make_token(T.EQUAL if self.match_nxt("=") else T.ASSIGN)
+                    return self.make_token(
+                        (T.IS if self.match("=") else T.EQUAL)
+                        if self.match_nxt("=")
+                        else T.ASSIGN
+                    )
+                case "!":
+                    return self.make_token(
+                        (T.ISNOT if self.match("=") else T.NEQUAL)
+                        if self.match_nxt("=")
+                        else T.NOT
+                    )
                 case "<":
                     return self.make_token(T.LESSE if self.match_nxt("=") else T.LESST)
                 case ">":
-                    return self.make_token(T.GREATE if self.match_nxt("=") else T.GREATT)
-                case "!":
-                    return self.make_token(T.NEQUAL if self.match_nxt("=") else T.NOT)
+                    return self.make_token(
+                        T.GREATE if self.match_nxt("=") else T.GREATT
+                    )
                 case " " | "\t" | "\n":
                     self.consume_spaces(" \t\n")
                 case char:
@@ -210,4 +220,3 @@ def Lexer(program: str) -> typing.Generator[Token, None, None]:
         yield tk
         if tk.typ == Token.Type.EOT:
             return
-
