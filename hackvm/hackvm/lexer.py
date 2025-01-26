@@ -22,8 +22,6 @@ class Token:
         CONSTANT = enum.auto()
         LOCAL = enum.auto()
         ARGUMENT = enum.auto()
-        POINTER = enum.auto()
-        THAT = enum.auto()
         TEMP = enum.auto()
         THIS = enum.auto()
         EOS = enum.auto()
@@ -33,6 +31,7 @@ class Token:
         IF_GOTO = enum.auto()
         CALL = enum.auto()
         RETURN = enum.auto()
+        MEMBER = enum.auto()
 
     lexeme: str
     typ: Type
@@ -63,6 +62,7 @@ keywords: dict[str, Token.Type] = {
     "return": Token.Type.RETURN,
     "goto": Token.Type.GOTO,
     "if-goto": Token.Type.IF_GOTO,
+    "member": Token.Type.MEMBER,
 }
 
 segment_specs: set[Token.Type] = {
@@ -70,10 +70,9 @@ segment_specs: set[Token.Type] = {
     Token.Type.LOCAL,
     Token.Type.THIS,
     Token.Type.ARGUMENT,
-    Token.Type.THAT,
-    Token.Type.POINTER,
     Token.Type.TEMP,
     Token.Type.CONSTANT,
+    Token.Type.MEMBER,
 }
 
 

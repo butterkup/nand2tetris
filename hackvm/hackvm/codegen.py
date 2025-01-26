@@ -8,27 +8,20 @@ from .parser import Statement
 
 @dt.dataclass(slots=True)
 class Symbols:
-    stack: int = 0  # SP [256-2047]
+    stack: int = 0  # SP
     local: int = 1  # LCL
     argument: int = 2  # ARG
-    stack_base: int = 256 # Base address for the stack to start from
+    stack_base: int = 256  # Base address for the stack to start from
 
-    # this and that must follow each other as depended by pointer
-    this: int = 3  # THIS
-    that: int = 4  # THAT
-
-    temp: int = 5  # TEMP R[5-12]
+    temp: int = 3  # TEMP R[3-12]
     static: int = 16  # STATIC [16-255]
+    # Free Registers, for compiler use.
     free_1: int = 13
     free_2: int = 14
     free_3: int = 15
 
     # constant must be zero so that index + constant == index
     constant: int = 0
-
-    @property
-    def pointer(self) -> int:
-        return self.this
 
 
 _bin_op_tbl: dict[Token.Type, str] = {
@@ -58,8 +51,6 @@ class CodeGen:
         self.stack = f"@{names.stack}"
         self.local = f"@{names.local}"
         self.argument = f"@{names.argument}"
-        self.this = f"@{names.this}"
-        self.that = f"@{names.that}"
         self.free_1 = f"@{names.free_1}"
         self.free_2 = f"@{names.free_2}"
         self.free_3 = f"@{names.free_3}"
@@ -71,6 +62,7 @@ class CodeGen:
         self.call_lbl = self.label() + "___CALL"
         self.return_lbl = self.label() + "___RETURN"
         self.function_lbl = self.label() + "___FUNCTION"
+        self.push_this_lbl = self.label() + "___PUSH_THIS"
 
     def decrement_SP(self):
         yield self.stack
@@ -95,6 +87,11 @@ class CodeGen:
     def load_stack_1_into_D(self):
         yield from self.set_A_to_SP1()
         yield "D=M"
+
+    def load_D_into_SP1(self):
+        yield self.stack
+        yield "A=M-1"
+        yield "M=D"
 
     def load_D_into_SP0(self):
         yield self.stack
@@ -197,7 +194,7 @@ class CodeGen:
         yield f"({end_nvars_setup})"
         yield self.free_3
         yield "A=M"
-        yield '0;JMP'
+        yield "0;JMP"
 
     def function_cmd(self, name: str, nvars: str):
         yield f"({name})"
@@ -240,8 +237,6 @@ class CodeGen:
         yield from self.push_D_into_stack()
         yield from self.push_src_into_stack(self.names.local)
         yield from self.push_src_into_stack(self.names.argument)
-        yield from self.push_src_into_stack(self.names.this)
-        yield from self.push_src_into_stack(self.names.that)
 
     def section_call_lbl(self):
         "API: D=return_address, free_1=function, free_2=nvars"
@@ -252,19 +247,19 @@ class CodeGen:
         yield "D=M"
         yield self.local
         yield "M=D"
-        # Calculate D=SP-nvars-5
+        # Calculate D=SP-nvars-3
         yield self.stack
         yield "D=M"
         yield self.free_2
         yield "D=D-M"
-        yield '@5'
-        yield 'D=D-A'
+        yield "@3"
+        yield "D=D-A"
         # ARG=D
         yield self.argument
         yield "M=D"
         # Jump to function
         yield self.free_1
-        yield 'A=M'
+        yield "A=M"
         yield "0;JMP"
 
     def call_cmd(self, function: str, nvars: str):
@@ -293,8 +288,6 @@ class CodeGen:
 
     def pop_frame(self):
         "Leave return address in names.free_3"
-        yield from self.pop_stack_into_dest(self.names.that)
-        yield from self.pop_stack_into_dest(self.names.this)
         yield from self.pop_stack_into_dest(self.names.argument)
         yield from self.pop_stack_into_dest(self.names.local)
         yield from self.load_stack_1_into_D()
@@ -350,7 +343,7 @@ class CodeGen:
         yield from ("@16", "D=A", self.stack, "M=D")
 
     def program_teardown(self):
-        yield '\n\n// VM INSTRUCTION HELPERS: [call, return, function]'
+        yield "\n\n// VM INSTRUCTION HELPERS: [call, return, function]"
         yield from self.section_call_lbl()
         yield from self.section_return_lbl()
         yield from self.section_function_lbl()
@@ -382,11 +375,48 @@ class CodeGen:
             )
         yield f"({mangled})"
 
+    def _load_THISpI_into_D(self, index: str, *this: str):
+        "AD=RAM[A]+index"
+        yield f"@{index}"
+        yield "D=A"
+        yield from this
+        yield "AD=D+M"
+
+    def _pop_member(self):
+        "API: D=this+I"
+        yield self.free_1
+        yield "M=D"
+        yield from self.load_stack_1_into_D()
+        yield self.free_1
+        yield "A=M"
+        yield "M=D"
+        yield from self.decrement_SP()
+
+    def pop_member(self, index: str):
+        yield from self.decrement_SP()
+        yield from self._load_THISpI_into_D(index, self.stack, "A=M")
+        yield from self._pop_member()
+
+    def pop_member_this(self, index: str):
+        yield from self._load_THISpI_into_D(index, self.argument, "A=M")
+        yield from self._pop_member()
+
+    def push_member(self, index: str):
+        yield from self._load_THISpI_into_D(index, self.stack, "A=M-1")
+        yield "D=M"
+        yield from self.load_D_into_SP1()
+
+    def push_member_this(self, index: str):
+        yield from self._load_THISpI_into_D(index, self.argument, "A=M")
+        yield "D=M"
+        yield from self.load_D_into_SP0()
+        yield from self.increment_SP()
+
     @staticmethod
     def mangle_label(nm: str, label: str):
         return f"{nm}.{label}"
 
-    def gen(self, stmts: ty.Iterator[Statement], nm: str) -> ty.Iterator[str]:
+    def gen(self, stmts: ty.Iterable[Statement], nm: str) -> ty.Iterator[str]:
         T = Token.Type
         for stmt in stmts:
             yield f"\n// {nm}[{stmt[0].line}]   " + " ".join(tk.lexeme for tk in stmt)
@@ -412,9 +442,18 @@ class CodeGen:
                 case (Token(typ=T.CALL), ident, nvars):
                     yield from self.scoped_call_cmd(nm, ident, nvars)
 
+                case (Token(typ=T.PUSH), Token(typ=T.MEMBER), index):
+                    yield from self.push_member(index.lexeme)
+                case (Token(typ=T.PUSH), Token(typ=T.THIS), index):
+                    yield from self.push_member_this(index.lexeme)
+                case (Token(typ=T.POP), Token(typ=T.MEMBER), index):
+                    yield from self.pop_member(index.lexeme)
+                case (Token(typ=T.POP), Token(typ=T.THIS), index):
+                    yield from self.pop_member_this(index.lexeme)
+
                 case (
                     Token(typ=T.PUSH),
-                    Token(typ=T.STATIC | T.TEMP | T.POINTER | T.CONSTANT) as t,
+                    Token(typ=T.STATIC | T.TEMP | T.CONSTANT) as t,
                     index,
                 ):
                     value = self.get_name(t.lexeme) + int(index.lexeme)
@@ -425,7 +464,7 @@ class CodeGen:
 
                 case (
                     Token(typ=T.POP),
-                    Token(typ=T.STATIC | T.TEMP | T.POINTER) as t,
+                    Token(typ=T.STATIC | T.TEMP) as t,
                     index,
                 ):
                     value = self.get_name(t.lexeme) + int(index.lexeme)
@@ -438,4 +477,3 @@ class CodeGen:
                     raise Exception(
                         f"Line {stmt[0].line}: Cannot translate statement {' '.join(map(lambda t: t.lexeme, stmt))!r}"
                     )
-
