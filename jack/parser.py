@@ -1,4 +1,6 @@
+import enum
 import typing as ty
+from contextlib import contextmanager
 
 from . import nodes
 from .token import Token
@@ -7,12 +9,34 @@ from .token import Token
 class _MissingExpr(Exception): ...
 
 
+class _S(enum.IntFlag):
+    NONE = enum.auto()
+    LOOP = enum.auto()
+    METHOD = enum.auto()
+    FUNCTION = enum.auto()
+
+
+class _Ctx:
+    def __init__(self, default: _S = _S.NONE):
+        self.stats = [default]
+
+    @contextmanager
+    def ctx(self, scope: _S):
+        self.stats.append(scope)
+        yield
+        self.stats.pop()
+
+    def test(self, val: _S):
+        return self.stats[-1] & val
+
+
 class _Parser_helper:
     "LL(1) parser for Jack, too sensitive, do not change any state."
 
     def __init__(self, lexer: ty.Iterable[Token]):
         self.lexer = iter(lexer)
         self.current = next(self.lexer)
+        self.status = _Ctx()
 
     def match(self, typ: Token.Type):
         if self.current.typ == typ:
@@ -214,16 +238,19 @@ class _Parser_helper:
                 Token.Type.FALSE
                 | Token.Type.TRUE
                 | Token.Type.ID
-                | Token.Type.THIS
                 | Token.Type.STRING
                 | Token.Type.INT
             ):
-                return nodes.Primary(self.consume())
+                pass
+            case Token.Type.THIS:
+                if not self.status.test(_S.METHOD):
+                    self.report(f"'this' used outside a method: {self.current}")
             case _:
                 self.report(
                     f"Expected an expression, but got {self.current.typ}",
                     ErrorT=_MissingExpr,
                 )
+        return nodes.Primary(self.consume())
 
     def _type_expression(self, left: nodes.TypeExpr):
         while True:
@@ -280,6 +307,8 @@ class _Parser_helper:
         return nodes.FDecl(name, typ, free)
 
     def parse_return(self):
+        if not self.status.test(_S.METHOD | _S.FUNCTION):
+            self.report("'return' used outside a function or method.")
         ret = self.expect(Token.Type.RETURN)
         if self.match(Token.Type.SCOLON):
             expr = None
@@ -297,22 +326,34 @@ class _Parser_helper:
                 raise
         else:
             if tk := self.match(Token.Type.COLON):
-                typ = self.type_expression()
-                if (
-                    not isinstance(store, nodes.Primary)
-                    or not store.value.typ == Token.Type.ID
+                if not (
+                    isinstance(store, nodes.Primary)
+                    and store.value.typ == Token.Type.ID
                 ):
-                    self.report(f"Expected type name after ':', got {self.current}")
+                    self.report(
+                        "Only ID expressions can be declared. Expected ID before ':'",
+                        current.start,
+                        tk.start,
+                    )
+                typ = self.type_expression()
                 if tk := self.match(Token.Type.ASSIGN):
                     value = self.expression()
                     return nodes.Init(store, tk, value, typ)
-                else:
-                    self.report("Variables must be initialized on declarations")
+                self.report("Variables must be initialized on declarations")
             if tk := self.match(Token.Type.ASSIGN):
+                match store:
+                    case nodes.Subscript() | nodes.Dot():
+                        pass
+                    case nodes.Primary(value=Token(typ=typ, lexeme=lx)):
+                        if typ != Token.Type.ID:
+                            self.report(f"Literal {lx!r} is not assignable.")
+                    case _:
+                        self.report(
+                            f"Cannot assign to expression {store.__class__.__name__!r}"
+                        )
                 value = self.expression()
                 return nodes.Assign(store, tk, value)
-            else:
-                return store
+            return store
 
     def parse_block(self):
         brace = self.expect(Token.Type.LBRACE)
@@ -330,9 +371,13 @@ class _Parser_helper:
                 case Token.Type.LBRACE:
                     stmt = self.parse_block()
                 case Token.Type.CONTINUE:
+                    if not self.status.test(_S.LOOP):
+                        self.report("'continue' used outside a loop")
                     stmt = nodes.Continue(self.consume())
                     self.expect(Token.Type.SCOLON)
                 case Token.Type.BREAK:
+                    if not self.status.test(_S.LOOP):
+                        self.report("'break' used outside a loop")
                     stmt = nodes.Break(self.consume())
                     self.expect(Token.Type.SCOLON)
                 case Token.Type.SCOLON:
@@ -362,7 +407,8 @@ class _Parser_helper:
     def parse_while(self):
         while_ = self.expect(Token.Type.WHILE)
         cond = self.expression()
-        body = self.parse_block()
+        with self.status.ctx(_S.LOOP):
+            body = self.parse_block()
         return nodes.While(while_, cond, body)
 
     def parse_for(self):
@@ -370,7 +416,8 @@ class _Parser_helper:
         name = self.expect(Token.Type.ID)
         self.expect(Token.Type.ASSIGN)
         iterable = self.expression()
-        body = self.parse_block()
+        with self.status.ctx(_S.LOOP):
+            body = self.parse_block()
         return nodes.For(for_, name, iterable, body)
 
     def parse_proc_decl(self):
@@ -378,8 +425,14 @@ class _Parser_helper:
         self.expect(Token.Type.LPAREN)
         params: list[nodes.Decl] = []
         if self.current.typ != Token.Type.RPAREN:
+            seen = set[str]()
             while True:
                 param = self.parse_decl()
+                if param.name.lexeme in seen:
+                    self.report(
+                        f"Duplicate parameter '{param.name.lexeme}' declaration."
+                    )
+                seen.add(param.name.lexeme)
                 params.append(param)
                 if self.match(Token.Type.COMMA):
                     continue
@@ -390,23 +443,25 @@ class _Parser_helper:
         return name, params, rettype
 
     def parse_proc(self, fn: Token, free: Token | None):
-        name, params, rettype = self.parse_proc_decl()
-        match self.current.typ:
-            case Token.Type.LBRACE:
-                body = self.parse_block()
-                if free is None:
-                    return nodes.Method(fn, name, params, rettype, body)
-                return nodes.Function(fn, name, params, rettype, free, body)
-            case Token.Type.SCOLON:
-                if free is None:
-                    return nodes.MethodDecl(fn, name, params, rettype)
-                return nodes.FunctionDecl(fn, name, params, rettype, free)
-            case _:
-                self.report(f"Expected '{{' or ';' but got {self.current.lexeme!r}")
+        with self.status.ctx(_S.METHOD if free is None else _S.FUNCTION):
+            name, params, rettype = self.parse_proc_decl()
+            match self.current.typ:
+                case Token.Type.LBRACE:
+                    body = self.parse_block()
+                    if free is None:
+                        return nodes.Method(fn, name, params, rettype, body)
+                    return nodes.Function(fn, name, params, rettype, free, body)
+                case Token.Type.SCOLON:
+                    if free is None:
+                        return nodes.MethodDecl(fn, name, params, rettype)
+                    return nodes.FunctionDecl(fn, name, params, rettype, free)
+                case _:
+                    self.report(f"Expected '{{' or ';' but got {self.current.lexeme!r}")
 
     def parse_class_body(self):
         self.expect(Token.Type.LBRACE)
         members: nodes.Class.Members = []
+        seen = set[str]()
         while True:
             match self.current.typ:
                 case Token.Type.FREE:
@@ -417,18 +472,22 @@ class _Parser_helper:
                         self.expect(Token.Type.SCOLON)
                         decl = nodes.FDecl(name, typ, free)
                         members.append(decl)
+                        name = decl.name
                     elif fn := self.match(Token.Type.FN):
                         func = self.parse_proc(fn, free)
                         members.append(func)
+                        name = func.name
                     else:
                         self.report(f"Expected ID or 'fn', but got {self.current}")
                 case Token.Type.FN:
                     func = self.parse_proc(self.consume(), None)
                     members.append(func)
+                    name = func.name
                 case Token.Type.ID:
                     decl = self.parse_decl()
                     self.expect(Token.Type.SCOLON)
                     members.append(decl)
+                    name = decl.name
                 case Token.Type.RBRACE:
                     self.consume()
                     break
@@ -437,8 +496,14 @@ class _Parser_helper:
                 case Token.Type.USING:
                     stmt = self.parse_using()
                     members.append(stmt)
+                    name = (
+                        stmt.path[-1] if isinstance(stmt, nodes.Import) else stmt.name
+                    )
                 case _:
                     self.report(f"Unexpected token {self.current}")
+            if name.lexeme in seen:
+                self.report(f"Symbol {name.lexeme!r} redeclared in class scope.")
+            seen.add(name.lexeme)
         return members
 
     def _parse_using_path(self, part: Token | None = None) -> tuple[list[Token], int]:
@@ -454,6 +519,8 @@ class _Parser_helper:
             if self.match(Token.Type.DOT):
                 continue
             break
+        if not path:
+            self.report("Missing import target.")
         return path, upcnt
 
     def parse_using(self):
@@ -509,7 +576,7 @@ class _Parser_helper:
                     self.report(f"Unexpected token {self.current}")
 
 
-def Parser(lexer: ty.Iterator[Token]) -> ty.Generator[nodes.Node, None, None]:
+def Parser(lexer: ty.Iterable[Token]) -> ty.Generator[nodes.Node, None, None]:
     "LL(1) parser for Jack. EOT must be the last token in the Token Stream (lexer)"
     parser = _Parser_helper(lexer)
     while True:

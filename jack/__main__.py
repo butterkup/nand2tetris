@@ -18,4 +18,3 @@ for file in sys.argv[1:]:
         #     print(token)
     else:
         print(f"Not a file: {path!s}", file=sys.stderr)
-
