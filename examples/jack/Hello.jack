@@ -1,0 +1,11 @@
+// Hello world in Jack
+
+class Hello {
+  free fn add(a: int, b: int, c: int): int {
+    return a + b + c;
+  }
+  free fn main(): void {
+    add(45, 67, 89);
+  }
+}
+

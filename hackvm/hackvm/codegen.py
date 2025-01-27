@@ -1,5 +1,4 @@
 import dataclasses as dt
-import itertools
 import typing as ty
 
 from .lexer import Token
@@ -14,7 +13,7 @@ class Symbols:
     stack_base: int = 256  # Base address for the stack to start from
 
     temp: int = 3  # TEMP R[3-12]
-    static: int = 16  # STATIC [16-255]
+    static: int = 16  # STATIC
     # Free Registers, for compiler use.
     free_1: int = 13
     free_2: int = 14
@@ -40,13 +39,32 @@ _cmp_op_tbl: dict[Token.Type, str] = {
 
 def label_generator(prefix: str, start: int = 0, /):
     "Unique infinite label source"
-    return map(lambda i: f"{prefix}{i}", itertools.count(start))
+    from itertools import count
+
+    return map(lambda i: f"{prefix}{i}", count(start))
 
 
 class CodeGen:
     "All state of this class are readonly."
 
-    def __init__(self, names: Symbols, labgen: ty.Iterator[str]):
+    __slots__ = (
+        "names",
+        "stack",
+        "local",
+        "argument",
+        "free_1",
+        "free_2",
+        "free_3",
+        "static",
+        "labgen",
+        "functions",
+        "referenced",
+        "call_lbl",
+        "return_lbl",
+        "function_lbl",
+    )
+
+    def __init__(self, names: Symbols, labgen: ty.Iterable[str]):
         self.names = names
         self.stack = f"@{names.stack}"
         self.local = f"@{names.local}"
@@ -55,14 +73,13 @@ class CodeGen:
         self.free_2 = f"@{names.free_2}"
         self.free_3 = f"@{names.free_3}"
         self.static = f"@{names.static}"
-        self.labgen = labgen
+        self.labgen = iter(labgen)
         self.functions: dict[str, tuple[str, int]] = {}
         self.referenced: dict[str, tuple[str, int]] = {}
-        # Mimimize setup/teardown by jumping to this locations
+        # Mimimize instruction duplication by jumping to this locations
         self.call_lbl = self.label() + "___CALL"
         self.return_lbl = self.label() + "___RETURN"
         self.function_lbl = self.label() + "___FUNCTION"
-        self.push_this_lbl = self.label() + "___PUSH_THIS"
 
     def decrement_SP(self):
         yield self.stack
@@ -262,9 +279,7 @@ class CodeGen:
         yield "A=M"
         yield "0;JMP"
 
-    def call_cmd(self, function: str, nvars: str):
-        yield f"@{function}"
-        yield "D=A"
+    def _call_base(self, nvars: str):
         yield self.free_1
         yield "M=D"
 
@@ -279,6 +294,11 @@ class CodeGen:
         yield f"@{self.call_lbl}"
         yield "0;JMP"
         yield f"({ret})"
+
+    def call_cmd(self, function: str, nvars: str):
+        yield f"@{function}"
+        yield "D=A"
+        yield from self._call_base(nvars)
 
     def pop_stack_into_dest(self, dest: int):
         yield from self.load_stack_1_into_D()
@@ -365,6 +385,18 @@ class CodeGen:
             self.referenced[ident.lexeme] = nm, ident.line
         return self.call_cmd(ident.lexeme, nvars.lexeme)
 
+    def pop_call_cmd(self, nvars: str):
+        yield from self.decrement_SP()
+        yield from self.load_stack_0_into_D()
+        yield from self._call_base(nvars)
+
+    def scoped_push_cmd(self, nm: str, ident: Token):
+        if ident.lexeme not in self.functions:
+            self.referenced[ident.lexeme] = nm, ident.line
+        yield f"@{ident.lexeme}"
+        yield "D=A"
+        yield from self.push_D_into_stack()
+
     def scoped_label_cmd(self, nm: str, ident: Token):
         mangled = self.mangle_label(nm, ident.lexeme)
         if mangled in self.functions:
@@ -439,9 +471,13 @@ class CodeGen:
                     yield from (f"@{self.mangle_label(nm, ident.lexeme)}", f"0;JMP")
                 case (Token(typ=T.RETURN),):
                     yield from self.return_cmd()
+                case (Token(typ=T.CALL), nvars):
+                    yield from self.pop_call_cmd(nvars.lexeme)
                 case (Token(typ=T.CALL), ident, nvars):
                     yield from self.scoped_call_cmd(nm, ident, nvars)
 
+                case (Token(typ=T.PUSH), Token(typ=T.ID) as ident):
+                    yield from self.scoped_push_cmd(nm, ident)
                 case (Token(typ=T.PUSH), Token(typ=T.MEMBER), index):
                     yield from self.push_member(index.lexeme)
                 case (Token(typ=T.PUSH), Token(typ=T.THIS), index):

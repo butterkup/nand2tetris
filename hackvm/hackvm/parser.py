@@ -6,7 +6,10 @@ type Statement = tuple[Token, ...]
 push_segment_specs = segment_specs
 pop_segment_specs = segment_specs - {Token.Type.CONSTANT}
 
+
 class Parser:
+    __slots__ = "lexer", "stash", "_empty", "labels", "resolve_gotos"
+
     def __init__(self, lexer: Lexer) -> None:
         self.lexer = lexer
         self.stash: list[Token] = []
@@ -32,7 +35,7 @@ class Parser:
         if tk is None:
             return
         if tk.typ == typ:
-            return typ
+            return tk
         self.push(tk)
 
     def expect(self, line: int, typs: Token.Type | typing.Container[Token.Type]):
@@ -43,6 +46,11 @@ class Parser:
                 f"Line {line}: Expected one of {typs} but got {tk.typ if tk else 'EOF'}"
             )
         return tk
+
+    def push_stmt(self, tk: Token, segspecs: typing.Container[Token.Type]):
+        if func := self.match(Token.Type.ID):
+            return self.make_stmt(tk, func)
+        return self.push_pop_stmt(tk, segspecs)
 
     def push_pop_stmt(
         self, tk: Token, segspecs: typing.Container[Token.Type]
@@ -102,14 +110,20 @@ class Parser:
                 ):
                     return self.make_stmt(tk)
                 case T.PUSH:
-                    return self.push_pop_stmt(tk, push_segment_specs)
+                    return self.push_stmt(tk, push_segment_specs)
                 case T.POP:
                     return self.push_pop_stmt(tk, pop_segment_specs)
                 case T.LABEL:
                     label = self.expect(tk.line, Token.Type.ID)
                     self.register_label(label)
                     return self.make_stmt(tk, label)
-                case T.CALL | T.FUNCTION:
+                case T.CALL:
+                    label = self.match(Token.Type.ID)
+                    nvars = self.expect(tk.line, Token.Type.INT)
+                    if label is None:
+                        return self.make_stmt(tk, nvars)
+                    return self.make_stmt(tk, label, nvars)
+                case T.FUNCTION:
                     label = self.expect(tk.line, Token.Type.ID)
                     nvars = self.expect(tk.line, Token.Type.INT)
                     return self.make_stmt(tk, label, nvars)

@@ -77,6 +77,8 @@ segment_specs: set[Token.Type] = {
 
 
 class Lexer:
+    __slots__ = "end", "program", "current", "start", "line"
+
     def __init__(self, program: str):
         self.end: int = len(program)
         self.program = program

@@ -1,0 +1,36 @@
+push constant 10
+push constant 20
+push constant 15
+
+call add3 3
+call sumN 1
+
+label end
+goto end
+
+function add3 0
+  push argument 0
+  push argument 1
+  push argument 2
+  add
+  add
+  return
+
+function sumN 1
+  label sumN.start
+  push argument 0
+  push constant 0
+  eq
+  if-goto sumN.end
+  push argument 0
+  push local 0
+  add
+  pop local 0
+  push constant 1
+  push argument 0
+  sub
+  pop argument 0
+  goto sumN.start
+  label sumN.end
+  return
+
