@@ -6,28 +6,28 @@ from . import nodes
 from .token import Token
 
 
-class _MissingExpr(Exception): ...
+class _MissingExpr(Exception):
+    ...
 
 
 class _S(enum.IntFlag):
     NONE = enum.auto()
     LOOP = enum.auto()
-    METHOD = enum.auto()
     FUNCTION = enum.auto()
 
 
 class _Ctx:
     def __init__(self, default: _S = _S.NONE):
-        self.stats = [default]
+        self._settings = [default]
 
     @contextmanager
-    def ctx(self, scope: _S):
-        self.stats.append(scope)
+    def push(self, scope: _S):
+        self._settings.append(scope)
         yield
-        self.stats.pop()
+        self._settings.pop()
 
     def test(self, val: _S):
-        return self.stats[-1] & val
+        return self._settings[-1] & val
 
 
 class _Parser_helper:
@@ -36,7 +36,19 @@ class _Parser_helper:
     def __init__(self, lexer: ty.Iterable[Token]):
         self.lexer = iter(lexer)
         self.current = next(self.lexer)
-        self.status = _Ctx()
+        self.ctx = _Ctx()
+        self.offset: int = 0
+        self._declared = [set()]
+
+    @property
+    def declared(self) -> set[str]:
+        return self._declared[-1]
+
+    @contextmanager
+    def scope(self, scope: set[str] | None = None):
+        self._declared.append(scope or set())
+        yield
+        self._declared.pop()
 
     def match(self, typ: Token.Type):
         if self.current.typ == typ:
@@ -76,7 +88,7 @@ class _Parser_helper:
         return tk
 
     def expression(self) -> nodes.Expr:
-        return self.expr_identity()
+        return self.expr_or()
 
     def _expr_l2r(
         self,
@@ -88,20 +100,6 @@ class _Parser_helper:
         while tk := self.match(typ):
             right = higher()
             left = ExprT(left, tk, right)
-        return left
-
-    def expr_identity(self):
-        left = self.expr_or()
-        while True:
-            NodeT: type[nodes._BinExpr]
-            if op := self.match(Token.Type.IS):
-                NodeT = nodes.Is
-            elif op := self.match(Token.Type.ISNOT):
-                NodeT = nodes.IsNot
-            else:
-                break
-            right = self.expr_or()
-            left = NodeT(left, op, right)
         return left
 
     def expr_or(self):
@@ -192,7 +190,7 @@ class _Parser_helper:
         return exprs
 
     def expr_call(self):
-        left = self.expr_dot()
+        left = self.expr_group()
         while True:
             if tk := self.match(Token.Type.LPAREN):
                 arguments = (
@@ -214,21 +212,17 @@ class _Parser_helper:
                     Token.Type.RBRACKET, "Open bracket '[' was never closed.", tk.start
                 )
                 left = nodes.Subscript(left, tk, arguments)
+            elif tk := self.match(Token.Type.DOT):
+                left = nodes.Dot(left, tk, self.expect(Token.Type.ID))
             else:
                 break
-        return left
-
-    def expr_dot(self):
-        left = self.expr_group()
-        while dot := self.match(Token.Type.DOT):
-            right = self.expect(Token.Type.ID)
-            left = nodes.Dot(left, dot, right)
         return left
 
     def expr_group(self):
         if tk := self.match(Token.Type.LPAREN):
             operand = self.expression()
-            self.expect(Token.Type.RPAREN, "Open paren '(' was not closed.", tk.start)
+            self.expect(Token.Type.RPAREN,
+                        "Open paren '(' was not closed.", tk.start)
             return nodes.Group(tk, operand)
         return self.expr_primary()
 
@@ -237,14 +231,19 @@ class _Parser_helper:
             case (
                 Token.Type.FALSE
                 | Token.Type.TRUE
-                | Token.Type.ID
                 | Token.Type.STRING
                 | Token.Type.INT
+                | Token.Type.NIL
             ):
                 pass
-            case Token.Type.THIS:
-                if not self.status.test(_S.METHOD):
-                    self.report(f"'this' used outside a method: {self.current}")
+            case Token.Type.ID:
+                value = self.consume()
+                if tk := self.match(Token.Type.SCOPE):
+                    path = [value.lexeme, self.expect(Token.Type.ID).lexeme]
+                    while self.match(Token.Type.SCOPE):
+                        path.append(self.expect(Token.Type.ID).lexeme)
+                    return nodes.Scope(tk, path)
+                return nodes.Identifier(value)
             case _:
                 self.report(
                     f"Expected an expression, but got {self.current.typ}",
@@ -252,62 +251,14 @@ class _Parser_helper:
                 )
         return nodes.Primary(self.consume())
 
-    def _type_expression(self, left: nodes.TypeExpr):
-        while True:
-            if op := self.match(Token.Type.LBRACKET):
-                params: list[nodes.TypeExpr] = []
-                if self.current.typ != Token.Type.RBRACKET:
-                    while True:
-                        param = self.type_expression()
-                        params.append(param)
-                        if self.match(Token.Type.COMMA):
-                            continue
-                        break
-                self.expect(
-                    Token.Type.RBRACKET, "Open bracket '[' was not closed.", op.start
-                )
-                left = nodes.TypeCall(op, left, params)
-            elif op := self.match(Token.Type.DOT):
-                member = self.expect(Token.Type.ID)
-                left = nodes.TypeMember(op, left, member)
-                while op := self.match(Token.Type.DOT):
-                    member = self.expect(Token.Type.ID)
-                    left = nodes.TypeMember(op, left, member)
-            else:
-                return left
-
-    def type_expression(self):
-        if tk := self.match(Token.Type.AUTO):
-            if p := self.match(Token.Type.LPAREN):
-                expr = self.expression()
-                self.expect(
-                    Token.Type.RPAREN, "Open paren '(' was not closed.", p.start
-                )
-                return nodes.TypeDeduce(tk, expr)
-            return nodes.TypeAuto(tk)
-        typname = nodes.TypeName(self.expect(Token.Type.ID))
-        right = self._type_expression(typname)
-        return typname if right is None else right
-
-    def _parse_decl(self) -> tuple[Token, nodes.TypeExpr]:
+    def parse_decl(self) -> nodes.Decl:
         name = self.expect(Token.Type.ID)
         self.expect(Token.Type.COLON)
         typ = self.type_expression()
-        return name, typ
-
-    def parse_decl(self) -> nodes.Decl:
-        name, typ = self._parse_decl()
         return nodes.Decl(name, typ)
 
-    def parse_fdecl(self, free: Token) -> nodes.FDecl:
-        name, typ = self._parse_decl()
-        if self.match(Token.Type.ASSIGN):
-            init = self.expression()
-            return nodes.FDeclInit(name, typ, free, init)
-        return nodes.FDecl(name, typ, free)
-
     def parse_return(self):
-        if not self.status.test(_S.METHOD | _S.FUNCTION):
+        if not self.ctx.test(_S.FUNCTION):
             self.report("'return' used outside a function or method.")
         ret = self.expect(Token.Type.RETURN)
         if self.match(Token.Type.SCOLON):
@@ -326,19 +277,17 @@ class _Parser_helper:
                 raise
         else:
             if tk := self.match(Token.Type.COLON):
-                if not (
-                    isinstance(store, nodes.Primary)
-                    and store.value.typ == Token.Type.ID
-                ):
+                if not isinstance(store, nodes.Identifier):
                     self.report(
                         "Only ID expressions can be declared. Expected ID before ':'",
                         current.start,
                         tk.start,
                     )
+                self.declare(store.name)
                 typ = self.type_expression()
                 if tk := self.match(Token.Type.ASSIGN):
                     value = self.expression()
-                    return nodes.Init(store, tk, value, typ)
+                    return nodes.Init(store, tk, typ, value)
                 self.report("Variables must be initialized on declarations")
             if tk := self.match(Token.Type.ASSIGN):
                 match store:
@@ -349,65 +298,37 @@ class _Parser_helper:
                             self.report(f"Literal {lx!r} is not assignable.")
                     case _:
                         self.report(
-                            f"Cannot assign to expression {store.__class__.__name__!r}"
+                            f"Cannot assign to expression of type {store.__class__.__name__!r}"
                         )
                 value = self.expression()
                 return nodes.Assign(store, tk, value)
-            return store
+            return nodes.Expression(store)
 
-    def parse_block(self):
+    def _parse_block(self):
         brace = self.expect(Token.Type.LBRACE)
         stmts: list[nodes.Node] = []
-        while True:
-            match self.current.typ:
-                case Token.Type.IF:
-                    stmt = self.parse_if()
-                case Token.Type.WHILE:
-                    stmt = self.parse_while()
-                case Token.Type.RETURN:
-                    stmt = self.parse_return()
-                case Token.Type.FOR:
-                    stmt = self.parse_for()
-                case Token.Type.LBRACE:
-                    stmt = self.parse_block()
-                case Token.Type.CONTINUE:
-                    if not self.status.test(_S.LOOP):
-                        self.report("'continue' used outside a loop")
-                    stmt = nodes.Continue(self.consume())
-                    self.expect(Token.Type.SCOLON)
-                case Token.Type.BREAK:
-                    if not self.status.test(_S.LOOP):
-                        self.report("'break' used outside a loop")
-                    stmt = nodes.Break(self.consume())
-                    self.expect(Token.Type.SCOLON)
-                case Token.Type.SCOLON:
-                    self.consume()
-                    continue
-                case Token.Type.RBRACE:
-                    break
-                case _:
-                    stmt = self.parse_assign()
-                    if stmt is None:
-                        self.report(f"Unexpected token {self.current}")
-                    self.expect(Token.Type.SCOLON)
+        while not self.match(Token.Type.RBRACE):
+            stmt = self.parse()
+            if stmt is None:
+                break
             stmts.append(stmt)
-        self.expect(Token.Type.RBRACE, "Open brace '{' was never closed.", brace.start)
         return nodes.Block(brace, stmts)
+
+    def parse_block(self):
+        with self.scope():
+            return self._parse_block()
 
     def parse_if(self):
         if_ = self.expect(Token.Type.IF)
         cond = self.expression()
         body = self.parse_block()
-        else_ = None
-        if tk := self.match(Token.Type.ELSE):
-            else_body = self.parse_block()
-            else_ = tk, else_body
-        return nodes.If(if_, cond, body, else_)
+        els = self._parse_block() if self.match(Token.Type.ELSE) else None
+        return nodes.If(if_, cond, body, els)
 
     def parse_while(self):
         while_ = self.expect(Token.Type.WHILE)
         cond = self.expression()
-        with self.status.ctx(_S.LOOP):
+        with self.ctx.push(_S.LOOP):
             body = self.parse_block()
         return nodes.While(while_, cond, body)
 
@@ -416,163 +337,125 @@ class _Parser_helper:
         name = self.expect(Token.Type.ID)
         self.expect(Token.Type.ASSIGN)
         iterable = self.expression()
-        with self.status.ctx(_S.LOOP):
+        with self.ctx.push(_S.LOOP):
             body = self.parse_block()
         return nodes.For(for_, name, iterable, body)
 
     def parse_proc_decl(self):
+        params: list[nodes.Decl] = []
+        seen = set[str]()
         name = self.expect(Token.Type.ID)
         self.expect(Token.Type.LPAREN)
-        params: list[nodes.Decl] = []
-        if self.current.typ != Token.Type.RPAREN:
-            seen = set[str]()
-            while True:
-                param = self.parse_decl()
-                if param.name.lexeme in seen:
-                    self.report(
-                        f"Duplicate parameter '{param.name.lexeme}' declaration."
-                    )
-                seen.add(param.name.lexeme)
-                params.append(param)
-                if self.match(Token.Type.COMMA):
-                    continue
+        while not self.match(Token.Type.RPAREN):
+            param = self.parse_decl()
+            if param.name.lexeme in seen:
+                self.report(
+                    f"Duplicate parameter '{param.name.lexeme}' declaration.")
+            seen.add(param.name.lexeme)
+            params.append(param)
+            if not self.match(Token.Type.COMMA):
+                self.expect(Token.Type.RPAREN)
                 break
-        self.expect(Token.Type.RPAREN)
         self.expect(Token.Type.COLON)
         rettype = self.type_expression()
-        return name, params, rettype
+        return name, params, rettype, seen
 
-    def parse_proc(self, fn: Token, free: Token | None):
-        with self.status.ctx(_S.METHOD if free is None else _S.FUNCTION):
-            name, params, rettype = self.parse_proc_decl()
+    def parse_proc(self):
+        fn = self.expect(Token.Type.FN)
+        with self.ctx.push(_S.FUNCTION):
+            name, params, rettype, seen = self.parse_proc_decl()
             match self.current.typ:
                 case Token.Type.LBRACE:
-                    body = self.parse_block()
-                    if free is None:
-                        return nodes.Method(fn, name, params, rettype, body)
-                    return nodes.Function(fn, name, params, rettype, free, body)
+                    with self.scope(seen):
+                        body = self._parse_block()
+                    return nodes.Function(fn, name, params, rettype, body)
                 case Token.Type.SCOLON:
-                    if free is None:
-                        return nodes.MethodDecl(fn, name, params, rettype)
-                    return nodes.FunctionDecl(fn, name, params, rettype, free)
+                    return nodes.FunctionDecl(fn, name, params, rettype)
                 case _:
-                    self.report(f"Expected '{{' or ';' but got {self.current.lexeme!r}")
+                    self.report(
+                        f"Expected '{{' or ';' but got {self.current.lexeme!r}")
 
-    def parse_class_body(self):
+    def _parse_struct_body(self):
         self.expect(Token.Type.LBRACE)
-        members: nodes.Class.Members = []
-        seen = set[str]()
-        while True:
-            match self.current.typ:
-                case Token.Type.FREE:
-                    free = self.consume()
-                    if name := self.match(Token.Type.ID):
-                        self.expect(Token.Type.COLON)
-                        typ = self.type_expression()
-                        self.expect(Token.Type.SCOLON)
-                        decl = nodes.FDecl(name, typ, free)
-                        members.append(decl)
-                        name = decl.name
-                    elif fn := self.match(Token.Type.FN):
-                        func = self.parse_proc(fn, free)
-                        members.append(func)
-                        name = func.name
-                    else:
-                        self.report(f"Expected ID or 'fn', but got {self.current}")
-                case Token.Type.FN:
-                    func = self.parse_proc(self.consume(), None)
-                    members.append(func)
-                    name = func.name
-                case Token.Type.ID:
-                    decl = self.parse_decl()
-                    self.expect(Token.Type.SCOLON)
-                    members.append(decl)
-                    name = decl.name
-                case Token.Type.RBRACE:
-                    self.consume()
-                    break
-                case Token.Type.SCOLON:
-                    continue
-                case Token.Type.USING:
-                    stmt = self.parse_using()
-                    members.append(stmt)
-                    name = (
-                        stmt.path[-1] if isinstance(stmt, nodes.Import) else stmt.name
-                    )
-                case _:
-                    self.report(f"Unexpected token {self.current}")
-            if name.lexeme in seen:
-                self.report(f"Symbol {name.lexeme!r} redeclared in class scope.")
-            seen.add(name.lexeme)
+        members: list[nodes.Decl] = []
+        while not self.match(Token.Type.RBRACE):
+            decl = self.parse_decl()
+            members.append(decl)
+            if not self.match(Token.Type.COMMA):
+                self.expect(Token.Type.RBRACE)
+                break
         return members
 
-    def _parse_using_path(self, part: Token | None = None) -> tuple[list[Token], int]:
-        path: list[Token] = [] if part is None else [part]
-        upcnt: int = 0
-        if part is None:
-            while self.match(Token.Type.DOT):
-                upcnt += 1
-            upcnt = upcnt - 1 if upcnt else upcnt
-        while True:
-            part = self.expect(Token.Type.ID)
-            path.append(part)
-            if self.match(Token.Type.DOT):
-                continue
-            break
-        if not path:
-            self.report("Missing import target.")
-        return path, upcnt
+    def type_expression(self):
+        value = self.expression()
+        if isinstance(value, (nodes.Identifier, nodes.Scope)):
+            return value
+        self.report(
+            f"Expression of type {type(value).__name__} cannot be a Type")
 
-    def parse_using(self):
-        using = self.expect(Token.Type.USING)
-        match self.current.typ:
-            case Token.Type.DOT:
-                path, upcnt = self._parse_using_path()
-                stmt = nodes.Import(using, path, upcnt)
-            case Token.Type.ID:
-                name = self.consume()
-                if self.match(Token.Type.DOT):
-                    path, upcnt = self._parse_using_path(name)
-                    stmt = nodes.Import(using, path, upcnt)
-                elif self.match(Token.Type.ASSIGN):
-                    value = self.type_expression()
-                    stmt = nodes.TypeAlias(using, name, value)
-                else:
-                    stmt = nodes.Import(using, [name], 0)
-            case _:
-                self.report("Expected ID or '.' after keyword 'using'")
+    def declare(self, name: str):
+        if name in self.declared:
+            self.report(f"Name {name!r} already bound in current scope.")
+        self.declared.add(name)
+
+    def parse_use(self):
+        use = self.expect(Token.Type.USE)
+        typ = self.type_expression()
+        if isinstance(typ, nodes.Identifier) and self.match(Token.Type.ASSIGN):
+            typ2 = self.type_expression()
+            node = nodes.ImportAs(use, typ2, typ)
+        else:
+            node = nodes.Import(use, typ)
         self.expect(Token.Type.SCOLON)
-        return stmt
+        self.declare(node.bind)
+        return node
 
-    def parse_class(self):
-        klass = self.expect(Token.Type.CLASS)
+    def parse_struct(self):
+        klass = self.expect(Token.Type.STRUCT)
         name = self.expect(Token.Type.ID)
-        if self.match(Token.Type.LBRACKET):
-            type_params: list[Token] = []
-            while True:
-                param = self.expect(Token.Type.ID)
-                type_params.append(param)
-                if self.match(Token.Type.COMMA):
-                    continue
-                break
-            self.expect(Token.Type.RBRACKET)
-            body = self.parse_class_body()
-            return nodes.Generic(klass, name, body, type_params)
-        body = self.parse_class_body()
-        return nodes.Class(klass, name, body)
+        self.declare(name.lexeme)
+        body = self._parse_struct_body()
+        return nodes.Struct(klass, name, body)
 
     def parse(self):
         while True:
             match self.current.typ:
-                case Token.Type.USING:
-                    return self.parse_using()
-                case Token.Type.CLASS:
-                    return self.parse_class()
+                case Token.Type.IF:
+                    return self.parse_if()
+                case Token.Type.WHILE:
+                    return self.parse_while()
+                case Token.Type.RETURN:
+                    return self.parse_return()
+                case Token.Type.FOR:
+                    return self.parse_for()
+                case Token.Type.LBRACE:
+                    return self.parse_block()
+                case Token.Type.CONTINUE:
+                    if not self.ctx.test(_S.LOOP):
+                        self.report("'continue' used outside a loop")
+                    self.expect(Token.Type.SCOLON)
+                    return nodes.Continue(self.consume())
+                case Token.Type.BREAK:
+                    if not self.ctx.test(_S.LOOP):
+                        self.report("'break' used outside a loop")
+                    self.expect(Token.Type.SCOLON)
+                    return nodes.Break(self.consume())
                 case Token.Type.SCOLON:
-                    pass
+                    self.consume()
+                    continue
+                case Token.Type.USE:
+                    return self.parse_use()
+                case Token.Type.STRUCT:
+                    return self.parse_struct()
+                case Token.Type.FN:
+                    return self.parse_proc()
                 case Token.Type.EOT:
                     break
                 case _:
+                    node = self.parse_assign()
+                    if node is not None:
+                        self.expect(Token.Type.SCOLON)
+                        return node
                     self.report(f"Unexpected token {self.current}")
 
 

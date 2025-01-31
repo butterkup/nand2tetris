@@ -1,7 +1,7 @@
 from . import nodes
 
 
-class ASTreePrinter(nodes.Visitor[None]):
+class ASTreePrinter(nodes.StmtVisitor[None]):
     def __init__(self, indent: int):
         self._indent = indent
         self._current = 0
@@ -23,6 +23,11 @@ class ASTreePrinter(nodes.Visitor[None]):
     def p(self, msg: str):
         print(" " * self._current + msg)
 
+    def visit_init(self, stmt: nodes.Init):
+        self.visit_assign(stmt)
+        with self.dent():
+            stmt.value.visit(self)
+
     def visit_assign(self, stmt: nodes.Assign):
         self.p(stmt.op.lexeme)
         with self.dent():
@@ -34,12 +39,7 @@ class ASTreePrinter(nodes.Visitor[None]):
         with self.dent():
             stmt.type.visit(self)
 
-    def visit_fdecl(self, stmt: nodes.FDecl):
-        self.p(stmt.free.lexeme + " " + stmt.name.lexeme)
-        with self.dent():
-            stmt.type.visit(self)
-
-    def visit_methoddecl(self, stmt: nodes.MethodDecl):
+    def visit_functiondecl(self, stmt: nodes.FunctionDecl):
         self.p(f"{stmt.name.lexeme}({len(stmt.params)})")
         with self.dent():
             self.p("RETURN")
@@ -50,29 +50,24 @@ class ASTreePrinter(nodes.Visitor[None]):
                 for param in stmt.params:
                     param.visit(self)
 
+    def visit_expression(self, stmt: nodes.Expression):
+        self.p("EXPR")
+        with self.dent():
+            stmt.expr.visit(self)
+
     def visit_block(self, stmt: nodes.Block):
         self.p("BLOCK")
         with self.dent():
             for member in stmt.members:
                 member.visit(self)
 
-    def visit_method(self, stmt: nodes.Method):
-        self.visit_methoddecl(stmt)
-        with self.dent():
-            stmt.body.visit(self)
-
-    def visit_functiondecl(self, stmt: nodes.FunctionDecl):
-        self.p("FREE")
-        with self.dent():
-            self.visit_methoddecl(stmt)
-
     def visit_function(self, stmt: nodes.Function):
         self.visit_functiondecl(stmt)
         with self.dent():
             stmt.body.visit(self)
 
-    def visit_class(self, stmt: nodes.Class):
-        self.p(f"CLASS[name={stmt.name.lexeme}]:")
+    def visit_struct(self, stmt: nodes.Struct):
+        self.p(f"STRUCT[{stmt.name.lexeme}]:")
         with self.dent():
             for member in stmt.members:
                 member.visit(self)
@@ -85,15 +80,18 @@ class ASTreePrinter(nodes.Visitor[None]):
             else:
                 stmt.expr.visit(self)
 
-    def visit_typealias(self, stmt: nodes.TypeAlias):
-        self.p(f"ALIAS[name={stmt.name.lexeme}]")
-        with self.dent():
-            stmt.typ.visit(self)
+    def visit_scope(self, expr: nodes.Scope):
+        self.p("::".join(expr.path))
 
     def visit_import(self, stmt: nodes.Import):
-        self.p(f"IMPORT[{stmt.upcnt}]")
+        self.p("Use")
         with self.dent():
-            self.p(".".join(pth.lexeme for pth in stmt.path))
+            stmt.path.visit(self)
+
+    def visit_importas(self, stmt: nodes.ImportAs):
+        self.p(f"Use[{stmt.bind}]")
+        with self.dent():
+            stmt.path.visit(self)
 
     def visit_while(self, stmt: nodes.While):
         self.p("WHILE")
@@ -106,23 +104,15 @@ class ASTreePrinter(nodes.Visitor[None]):
         with self.dent():
             stmt.body.visit(self)
 
-    def visit_generic(self, stmt: nodes.Generic):
-        params = tuple(t.lexeme for t in stmt.params)
-        self.p(f"GENERIC[name={stmt.name.lexeme}, params={params}]")
-        with self.dent():
-            for member in stmt.members:
-                member.visit(self)
-
     def visit_if(self, stmt: nodes.If):
         self.p("IF")
         with self.dent():
             stmt.cond.visit(self)
             stmt.body.visit(self)
-
-    def visit_typededuce(self, expr: nodes.TypeDeduce):
-        self.visit_typeauto(expr)
-        with self.dent():
-            expr.operand.visit(self)
+        if stmt.els:
+            self.p("ELSE")
+            with self.dent():
+                stmt.els.visit(self)
 
     def visit_group(self, expr: nodes.Group):
         self.p(expr.op.lexeme)
@@ -227,18 +217,6 @@ class ASTreePrinter(nodes.Visitor[None]):
             expr.left.visit(self)
             expr.right.visit(self)
 
-    def visit_is(self, expr: nodes.Is):
-        self.p(expr.op.lexeme)
-        with self.dent():
-            expr.left.visit(self)
-            expr.right.visit(self)
-
-    def visit_isnot(self, expr: nodes.IsNot):
-        self.p(expr.op.lexeme)
-        with self.dent():
-            expr.left.visit(self)
-            expr.right.visit(self)
-
     def visit_divide(self, expr: nodes.Divide):
         self.p(expr.op.lexeme)
         with self.dent():
@@ -274,38 +252,6 @@ class ASTreePrinter(nodes.Visitor[None]):
 
     def visit_primary(self, expr: nodes.Primary):
         self.p(expr.value.lexeme)
-
-    def visit_typeauto(self, expr: nodes.TypeAuto):
-        self.p(expr.token.lexeme)
-
-    def visit_typecall(self, expr: nodes.TypeCall):
-        self.p(expr.token.lexeme)
-        with self.dent():
-            expr.generic.visit(self)
-            for param in expr.params:
-                param.visit(self)
-
-    def visit_typemember(self, expr: nodes.TypeMember):
-        self.p(expr.token.lexeme)
-        with self.dent():
-            expr.left.visit(self)
-            self.p(expr.right.lexeme)
-
-    def visit_typename(self, expr: nodes.TypeName):
-        self.p(expr.token.lexeme)
-
-    def visit_init(self, stmt: nodes.Init):
-        self.p(":")
-        with self.dent():
-            stmt.left.visit(self)
-            stmt.typ.visit(self)
-            stmt.right.visit(self)
-
-    def visit_fdeclinit(self, stmt: nodes.FDeclInit):
-        self.p(f"FDECLINIT")
-        with self.dent():
-            self.p(stmt.name.lexeme)
-            stmt.init.visit(self)
 
     def print(self, node: nodes.Node):
         node.visit(self)

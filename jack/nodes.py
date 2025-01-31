@@ -3,80 +3,61 @@ import typing
 
 from .token import Token
 
-type Scope = dict[str, Node]
-
 
 class Node:
-    def visit[T](self, visitor: "BaseVisitor[T]") -> T:
+    def visit[T](self, visitor: "StmtVisitor[T]") -> T:
         target = self.__class__.__name__
         selected = f"visit_{target.lower()}"
         return getattr(visitor, selected)(self)
 
 
-class Expr(Node): ...
+class Expr(Node):
+    ...
+
+
+class Stmt(Node):
+    ...
 
 
 @dt.dataclass(slots=True)
-class TypeExpr(Expr):
-    token: Token
+class Expression(Stmt):
+    expr: Expr
 
 
 @dt.dataclass(slots=True)
-class Break(Node):
+class Break(Stmt):
     keyword: Token
 
 
 @dt.dataclass(slots=True)
-class Continue(Node):
+class Continue(Stmt):
     keyword: Token
 
 
 @dt.dataclass(slots=True)
-class Return(Node):
+class Return(Stmt):
     ret: Token
-    expr: Expr | None
+    expr: Expr | None = None
 
 
 @dt.dataclass(slots=True)
 class Decl(Node):
     name: Token
-    type: TypeExpr
+    type: Expr
 
 
 @dt.dataclass(slots=True)
-class FDecl(Decl):
-    free: Token
+class Block(Stmt):
+    brace: Token
+    members: list[Node]
 
 
 @dt.dataclass(slots=True)
-class FDeclInit(FDecl):
-    init: Expr
-
-
-@dt.dataclass(slots=True)
-class MethodDecl(Node):
+class FunctionDecl(Stmt):
     fn: Token
     name: Token
     params: list[Decl]
-    return_type: TypeExpr
-    scope: Scope = dt.field(default_factory=dict, init=False)
-
-
-@dt.dataclass(slots=True)
-class FunctionDecl(MethodDecl):
-    free: Token
-
-
-@dt.dataclass(slots=True)
-class Block(Node):
-    brace: Token
-    members: list[Node]
-    scope: Scope = dt.field(default_factory=dict, init=False)
-
-
-@dt.dataclass(slots=True)
-class Method(MethodDecl):
-    body: Block
+    return_type: Expr
 
 
 @dt.dataclass(slots=True)
@@ -85,50 +66,50 @@ class Function(FunctionDecl):
 
 
 @dt.dataclass(slots=True)
-class Import(Node):
-    using: Token
-    path: list[Token]
-    upcnt: int
+class Import(Stmt):
+    use: Token
+    path: "Scope | Identifier"
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+    bind = name
 
 
 @dt.dataclass(slots=True)
-class TypeAlias(Node):
-    using: Token
+class ImportAs(Import):
+    alias: "Identifier"
+
+    @property
+    def bind(self) -> str:
+        return self.alias.name
+
+
+@dt.dataclass(slots=True)
+class Struct(Stmt):
+    klass: Token
     name: Token
-    typ: TypeExpr
+    members: list[Decl]
 
 
 @dt.dataclass(slots=True)
-class Class(Node):
-    type Members = list[Decl | MethodDecl | Import | TypeAlias]
-    class_: Token
-    name: Token
-    members: Members
-    scope: Scope = dt.field(default_factory=dict, init=False)
-
-
-@dt.dataclass(slots=True)
-class Generic(Class):
-    params: list[Token]
-
-
-@dt.dataclass(slots=True)
-class If(Node):
+class If(Stmt):
     if_: Token
     cond: Expr
     body: Block
-    else_: tuple[Token, Block] | None
+    els: Block | None = None
 
 
 @dt.dataclass(slots=True)
-class While(Node):
+class While(Stmt):
     while_: Token
     cond: Expr
     body: Block
 
 
 @dt.dataclass(slots=True)
-class Assign(Node):
+class Assign(Stmt):
     left: Expr
     op: Token
     right: Expr
@@ -136,11 +117,11 @@ class Assign(Node):
 
 @dt.dataclass(slots=True)
 class Init(Assign):
-    typ: TypeExpr
+    value: Expr
 
 
 @dt.dataclass(slots=True)
-class For(Node):
+class For(Stmt):
     for_: Token
     bind: Token
     expr: Expr
@@ -148,23 +129,6 @@ class For(Node):
 
 
 # fmt: off
-@dt.dataclass(slots=True)
-class TypeCall(TypeExpr):
-    generic: TypeExpr
-    params: list[TypeExpr]
-
-@dt.dataclass(slots=True)
-class TypeMember(TypeExpr):
-    left: TypeExpr
-    right: Token
-
-class TypeName(TypeExpr): ...
-class TypeAuto(TypeExpr): ...
-
-@dt.dataclass(slots=True)
-class TypeDeduce(TypeAuto):
-    operand: Expr
-
 @dt.dataclass(slots=True)
 class _UnExpr(Expr):
     op: Token
@@ -179,6 +143,21 @@ class _BinExpr[RightT=Expr](Expr):
 @dt.dataclass(slots=True)
 class Primary(Expr):
     value: Token
+
+@dt.dataclass(slots=True)
+class Identifier(Primary):
+    @property
+    def name(self) -> str:
+        return self.value.lexeme
+
+@dt.dataclass(slots=True)
+class Scope(Expr):
+    op: Token
+    path: list[str]
+
+    @property
+    def name(self) -> str:
+        return self.path[-1]
 
 class Subscript(_BinExpr[list[Expr]]): ...
 class Call(_BinExpr[list[Expr]]): ...
@@ -202,21 +181,10 @@ class LessT(_BinExpr): ...
 class LessE(_BinExpr): ...
 class GreatT(_BinExpr): ...
 class GreatE(_BinExpr): ...
-class Is(_BinExpr): ...
-class IsNot(_BinExpr): ...
 
 
-class BaseVisitor[T](typing.Protocol): ...
 
-class TypeExprVisitor[T](BaseVisitor[T], typing.Protocol):
-    def visit_typename(self, expr: TypeName) -> T: ...
-    def visit_typeauto(self, expr: TypeAuto) -> T: ...
-    def visit_typemember(self, expr: TypeMember) -> T: ...
-    def visit_typecall(self, expr: TypeCall) -> T: ...
-    def visit_typededuce(self, expr: TypeDeduce) -> T: ...
-
-
-class ExprVisitor[T](BaseVisitor[T], typing.Protocol):
+class ExprVisitor[T](typing.Protocol):
     def visit_primary(self, expr: Primary) -> T: ...
     def visit_subscript(self, expr: Subscript) -> T: ...
     def visit_call(self, expr: Call) -> T: ...
@@ -240,36 +208,26 @@ class ExprVisitor[T](BaseVisitor[T], typing.Protocol):
     def visit_greate(self, expr: GreatE) -> T: ...
     def visit_lesst(self, expr: LessT) -> T: ...
     def visit_lesse(self, expr: LessE) -> T: ...
-    def visit_is(self, expr: Is) -> T: ...
-    def visit_isnot(self, expr: IsNot) -> T: ...
+    def visit_scope(self, expr: Scope) -> T: ...
+    def visit_identifier(self, expr: Identifier) -> T:
+        return self.visit_primary(expr)
 
 
-class StmtVisitor[T](BaseVisitor[T], typing.Protocol):
-    def visit_class(self, stmt: Class) -> T: ...
+class StmtVisitor[T](ExprVisitor[T], typing.Protocol):
+    def visit_struct(self, stmt: Struct) -> T: ...
     def visit_block(self, stmt: Block) -> T: ...
-    def visit_generic(self, stmt: Generic) -> T: ...
-    def visit_methoddecl(self, stmt: MethodDecl) -> T: ...
+    def visit_functiondecl(self, stmt: FunctionDecl) -> T: ...
     def visit_if(self, stmt: If) -> T: ...
     def visit_return(self, stmt: Return) -> T: ...
     def visit_import(self, stmt: Import) -> T: ...
+    def visit_importas(self, stmt: ImportAs) -> T: ...
     def visit_while(self, stmt: While) -> T: ...
     def visit_for(self, stmt: For) -> T: ...
-    def visit_method(self, stmt: Method) -> T: ...
-    def visit_functiondecl(self, stmt: FunctionDecl) -> T: ...
     def visit_function(self, stmt: Function) -> T: ...
-    def visit_fdecl(self, stmt: FDecl) -> T: ...
-    def visit_decl(self, stmt: Decl) -> T: ...
     def visit_assign(self, stmt: Assign) -> T: ...
+    def visit_init(self, stmt: Init) -> T: ...
     def visit_continue(self, stmt: Continue) -> T: ...
     def visit_break(self, stmt: Break) -> T: ...
-    def visit_fdeclinit(self, stmt: FDeclInit) -> T: ...
-    def visit_init(self, stmt: Init) -> T: ...
+    def visit_expression(self, stmt: Expression) -> T: ...
 
-
-class Visitor[T](
-    TypeExprVisitor[T],
-    ExprVisitor[T],
-    StmtVisitor[T],
-    typing.Protocol
-):...
 # fmt: on

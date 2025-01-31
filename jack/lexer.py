@@ -5,6 +5,7 @@ from .token import KEYWORDS, Token
 
 class _Lexer_helper:
     "One time use object. Do not modify any state, very sensitive."
+
     __slots__ = (
         "program",
         "lex_off",
@@ -30,7 +31,7 @@ class _Lexer_helper:
     __bool__ = empty
 
     def lexeme(self) -> str:
-        return self.program[self.lex_off : self.offset]
+        return self.program[self.lex_off: self.offset]
 
     def curloc(self) -> Token.Loc:
         return Token.Loc(
@@ -173,28 +174,20 @@ class _Lexer_helper:
                     return self.make_ctoken(T.RBRACE)
                 case "~":
                     return self.make_ctoken(T.TILDE)
-                case ":":
-                    return self.make_ctoken(T.COLON)
                 case ";":
                     return self.make_ctoken(T.SCOLON)
                 case ",":
                     return self.make_ctoken(T.COMMA)
+                case ":":
+                    return self.make_token(T.SCOPE if self.match_nxt(":") else T.COLON)
                 case "|":
                     return self.make_token(T.OR if self.match_nxt("|") else T.BAR)
                 case "&":
                     return self.make_token(T.AND if self.match_nxt("&") else T.AMP)
                 case "=":
-                    return self.make_token(
-                        (T.IS if self.match("=") else T.EQUAL)
-                        if self.match_nxt("=")
-                        else T.ASSIGN
-                    )
+                    return self.make_token(T.EQUAL if self.match_nxt("=") else T.ASSIGN)
                 case "!":
-                    return self.make_token(
-                        (T.ISNOT if self.match("=") else T.NEQUAL)
-                        if self.match_nxt("=")
-                        else T.NOT
-                    )
+                    return self.make_token(T.NEQUAL if self.match_nxt("=") else T.NOT)
                 case "<":
                     return self.make_token(T.LESSE if self.match_nxt("=") else T.LESST)
                 case ">":

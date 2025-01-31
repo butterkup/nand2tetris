@@ -5,16 +5,20 @@ import enum
 @dt.dataclass(slots=True)
 class Token:
     class Type(enum.StrEnum):
-        CLASS = enum.auto()
-        IS = enum.auto()
-        ISNOT = enum.auto()
+        # Keywords
+        STRUCT = enum.auto()
         BREAK = enum.auto()
         CONTINUE = enum.auto()
         RETURN = enum.auto()
-        ID = enum.auto()
-        INT = enum.auto()
-        STRING = enum.auto()
-        FREE = enum.auto()
+        FN = enum.auto()
+        FOR = enum.auto()
+        WHILE = enum.auto()
+        ASSIGN = enum.auto()
+        IF = enum.auto()
+        ELSE = enum.auto()
+        USE = enum.auto()
+
+        # Symbols
         LBRACE = enum.auto()
         RBRACE = enum.auto()
         LPAREN = enum.auto()
@@ -24,15 +28,22 @@ class Token:
         COMMA = enum.auto()
         SCOLON = enum.auto()
         COLON = enum.auto()
-        FN = enum.auto()
-        FOR = enum.auto()
-        WHILE = enum.auto()
+        SCOPE = enum.auto()
+        #  End Of Token stream marker
+        EOT = enum.auto()
+
+        # Primaries
+        #  Keywords
+        NIL = enum.auto()
+        TRUE = enum.auto()
+        FALSE = enum.auto()
+        #  Values
+        ID = enum.auto()
+        INT = enum.auto()
+        STRING = enum.auto()
+
+        # Operators
         DOT = enum.auto()
-        PLUS = enum.auto()
-        MINUS = enum.auto()
-        STAR = enum.auto()
-        SLASH = enum.auto()
-        ASSIGN = enum.auto()
         EQUAL = enum.auto()
         NEQUAL = enum.auto()
         LESST = enum.auto()
@@ -45,14 +56,10 @@ class Token:
         AMP = enum.auto()
         BAR = enum.auto()
         TILDE = enum.auto()
-        TRUE = enum.auto()
-        FALSE = enum.auto()
-        IF = enum.auto()
-        ELSE = enum.auto()
-        THIS = enum.auto()
-        USING = enum.auto()
-        AUTO = enum.auto()
-        EOT = enum.auto()
+        PLUS = enum.auto()
+        MINUS = enum.auto()
+        STAR = enum.auto()
+        SLASH = enum.auto()
 
     @dt.dataclass(slots=True)
     class Loc:
@@ -67,19 +74,17 @@ class Token:
 
 
 KEYWORDS: dict[str, Token.Type] = {
-    "class": Token.Type.CLASS,
+    "struct": Token.Type.STRUCT,
     "fn": Token.Type.FN,
     "for": Token.Type.FOR,
     "while": Token.Type.WHILE,
     "if": Token.Type.IF,
     "else": Token.Type.ELSE,
-    "free": Token.Type.FREE,
     "true": Token.Type.TRUE,
     "false": Token.Type.FALSE,
-    "this": Token.Type.THIS,
-    "using": Token.Type.USING,
+    "use": Token.Type.USE,
     "return": Token.Type.RETURN,
     "break": Token.Type.BREAK,
     "continue": Token.Type.CONTINUE,
-    "auto": Token.Type.AUTO,
+    "nil": Token.Type.NIL,
 }
