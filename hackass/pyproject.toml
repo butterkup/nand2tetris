@@ -2,7 +2,7 @@
 name = "hackass"
 version = "1.0.0"
 authors = [
-  { name="Simon Nganga", email="theedushbag@gmail.com" },
+  { name="Simon Nganga", email="sn.butterkup@gmail.com" },
 ]
 description = "hackass is an assembler for the Hack machine; from HackASM to HackExecutable."
 requires-python = ">=3.11"

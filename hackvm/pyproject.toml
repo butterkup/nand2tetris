@@ -2,7 +2,7 @@
 name = "hackvm"
 version = "1.1.0"
 authors = [
-  { name="Simon Nganga", email="theedushbag@gmail.com" },
+  { name="Simon Nganga", email="sn.butterkup@gmail.com" },
 ]
 description = "hackvm is a translator from VM instructions to HackASM."
 requires-python = ">=3.11"
